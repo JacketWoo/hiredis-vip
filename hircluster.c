@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <ctype.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/poll.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 
 #include "hircluster.h"
 #include "hiutil.h"
@@ -2466,6 +2471,41 @@ int redisClusterConnect2(redisClusterContext *cc)
     return _redisClusterConnect2(cc);
 }
 
+static int is_sock_alive(const int32_t sockfd) {
+  if (sockfd < 0) {
+    return -1;
+  }
+  int32_t ori_flag = fcntl(sockfd, F_GETFL, 0);
+  int block = !(ori_flag & O_NONBLOCK);
+  if (block) {
+    fcntl(sockfd, F_SETFL, ori_flag | O_NONBLOCK);
+  }
+
+  struct pollfd p; 
+  memset(&p, 0, sizeof(p));
+  p.fd = sockfd;
+  p.events = POLLIN | POLLERR | POLLHUP | POLLPRI;
+  if (!poll(&p, 1, 0)) {
+    if (block) {
+      fcntl(sockfd, F_SETFL, ori_flag);
+    }
+    return 0;
+  }
+  char buf;
+  int32_t n = recv(sockfd, &buf, sizeof(buf), MSG_PEEK);
+  if (!n  /* the peer end close the connection */
+      || (n < 0 && errno != EAGAIN) /* some error occurs */) {
+    if (block) {
+      fcntl(sockfd, F_SETFL, ori_flag);
+    }
+    return -1;
+  }
+  if (block) {
+    fcntl(sockfd, F_SETFL, ori_flag);
+  }
+  return 0;
+}
+
 redisContext *ctx_get_by_node(redisClusterContext *cc, cluster_node *node)
 {
     redisContext *c = NULL;
@@ -2477,7 +2517,7 @@ redisContext *ctx_get_by_node(redisClusterContext *cc, cluster_node *node)
     c = node->con;
     if(c != NULL)
     {
-        if(c->err)
+        if(c->err || (-1 == is_sock_alive(c->fd)))
         {
             redisReconnect(c);
 
