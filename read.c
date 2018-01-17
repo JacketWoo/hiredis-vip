@@ -435,6 +435,9 @@ redisReader *redisReaderCreateWithFunctions(redisReplyObjectFunctions *fn) {
 }
 
 void redisReaderFree(redisReader *r) {
+    if (!r) {
+      return;
+    }
     if (r->reply != NULL && r->fn && r->fn->freeObject)
         r->fn->freeObject(r->reply);
     if (r->buf != NULL)
